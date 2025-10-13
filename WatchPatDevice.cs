@@ -118,6 +118,18 @@ public class WatchPatDevice : IDisposable
             // Subscribe to value changed events
             _rxCharacteristic.ValueChanged += OnCharacteristicValueChanged;
 
+            // Subscribe to DATA packet events to send ACK responses
+            // This is CRITICAL - device will retransmit if ACKs are not sent!
+            _telemetryHandler.DataPacketReceived += async (sender, e) =>
+            {
+                var (packet, transactionId, commandId) = e;
+                Console.WriteLine($"[Device] Sending ACK for DATA packet (TxnID={transactionId})...");
+
+                // Create and send ACK packet
+                var ackPacket = WatchPatProtocol.CreateAckCommand(commandId, status: 0, transactionId);
+                await WriteCommandAsync(ackPacket, "ACK");
+            };
+
             // Subscribe to connection status changes
             _device.ConnectionStatusChanged += OnConnectionStatusChanged;
 
@@ -222,6 +234,7 @@ public class WatchPatDevice : IDisposable
 
     /// <summary>
     /// Start a sleep study session with proper initialization
+    /// Sends both START_SESSION and START_ACQUISITION commands (matching Android workflow)
     /// </summary>
     public async Task<bool> StartSleepStudyAsync()
     {
@@ -247,46 +260,66 @@ public class WatchPatDevice : IDisposable
             // Generate mobile ID (simplified version)
             int mobileId = WatchPatProtocol.GenerateMobileId("DESKTOP");
 
-            Console.WriteLine($"[Device] Sending START SLEEP SESSION command...");
+            // STEP 1: Send START_SESSION (0x0100) - Sets up session parameters
+            Console.WriteLine($"[Device] Step 1/2: Sending START_SESSION command (0x0100)...");
 
-            // Create start session command packet
-            var packet = WatchPatProtocol.CreateStartSessionCommand(
+            var sessionPacket = WatchPatProtocol.CreateStartSessionCommand(
                 mobileId,
                 WatchPatProtocol.SessionMode.Sleep,
                 "Windows/10.0"
             );
 
-            // Send command
-            bool success = await WriteCommandAsync(packet, "START_SLEEP_SESSION");
+            bool sessionSuccess = await WriteCommandAsync(sessionPacket, "START_SESSION");
 
-            if (success)
+            if (!sessionSuccess)
             {
-                Console.WriteLine($"[Device] ✓ Sleep study command sent successfully");
-                Console.WriteLine($"[Device] Waiting for device response...");
+                Console.WriteLine($"[Device] ✗ Failed to send START_SESSION command");
+                return false;
+            }
 
-                // Wait for device response/acknowledgment
-                await Task.Delay(3000);
+            Console.WriteLine($"[Device] ✓ START_SESSION command sent successfully");
+            Console.WriteLine($"[Device] Waiting for device to process session setup...");
 
-                // Check if still connected or if device intentionally disconnected
-                if (_isConnected)
-                {
-                    Console.WriteLine($"[Device] ✓ Device remains connected - session active");
-                    Console.WriteLine($"[Device] Device is now recording autonomously");
-                }
-                else
-                {
-                    Console.WriteLine($"[Device] ℹ Device disconnected after start command");
-                    Console.WriteLine($"[Device] This is NORMAL - device conserves battery during recording");
-                    Console.WriteLine($"[Device] Device will operate autonomously for 8+ hours");
-                    Console.WriteLine($"[Device] Reconnect later to retrieve data");
-                }
+            // Wait for device to process START_SESSION
+            await Task.Delay(2000);
+
+            // STEP 2: Send START_ACQUISITION (0x0600) - Actually begins data collection
+            // This is what Android app does in TransactionService.h()
+            Console.WriteLine($"[Device] Step 2/2: Sending START_ACQUISITION command (0x0600)...");
+            Console.WriteLine($"[Device] This command triggers actual data collection");
+
+            var acquisitionPacket = WatchPatProtocol.CreateStartAcquisitionCommand();
+            bool acquisitionSuccess = await WriteCommandAsync(acquisitionPacket, "START_ACQUISITION");
+
+            if (!acquisitionSuccess)
+            {
+                Console.WriteLine($"[Device] ✗ Failed to send START_ACQUISITION command");
+                Console.WriteLine($"[Device] Session may be configured but not actively collecting data");
+                return false;
+            }
+
+            Console.WriteLine($"[Device] ✓ START_ACQUISITION command sent successfully");
+            Console.WriteLine($"[Device] Waiting for device response...");
+
+            // Wait for device response/acknowledgment
+            await Task.Delay(3000);
+
+            // Check if still connected or if device intentionally disconnected
+            if (_isConnected)
+            {
+                Console.WriteLine($"[Device] ✓ Device remains connected - session active");
+                Console.WriteLine($"[Device] Device is now collecting data");
+                Console.WriteLine($"[Device] You can now use 'Receive Study Data' to capture live data");
             }
             else
             {
-                Console.WriteLine($"[Device] ✗ Failed to send sleep study command");
+                Console.WriteLine($"[Device] ℹ Device disconnected after start commands");
+                Console.WriteLine($"[Device] This is NORMAL - device conserves battery during recording");
+                Console.WriteLine($"[Device] Device will operate autonomously for 8+ hours");
+                Console.WriteLine($"[Device] Reconnect later to retrieve data");
             }
 
-            return success;
+            return true;
         }
         catch (Exception ex)
         {
@@ -387,8 +420,9 @@ public class WatchPatDevice : IDisposable
                 fileStream = new System.IO.FileStream(filepath, System.IO.FileMode.Create, System.IO.FileAccess.Write);
 
                 // Subscribe to data packet events
-                EventHandler<byte[]> dataHandler = (sender, packet) =>
+                EventHandler<(byte[] packet, int transactionId, ushort commandId)> dataHandler = (sender, e) =>
                 {
+                    var (packet, transactionId, commandId) = e;
                     // Write packet to file (same as Android app)
                     fileStream.Write(packet, 0, packet.Length);
                     fileStream.Flush();
@@ -474,8 +508,9 @@ public class WatchPatDevice : IDisposable
                 fileStream = new System.IO.FileStream(filepath, System.IO.FileMode.Create, System.IO.FileAccess.Write);
 
                 // Subscribe to data packet events
-                EventHandler<byte[]> dataHandler = (sender, packet) =>
+                EventHandler<(byte[] packet, int transactionId, ushort commandId)> dataHandler = (sender, e) =>
                 {
+                    var (packet, transactionId, commandId) = e;
                     // Write packet to file (same as Android app)
                     fileStream.Write(packet, 0, packet.Length);
                     fileStream.Flush();

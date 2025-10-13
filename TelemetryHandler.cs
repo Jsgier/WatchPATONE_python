@@ -18,7 +18,7 @@ public class TelemetryHandler
     public event EventHandler<bool> DevicePairedResponseReceived;
     public event EventHandler<(ushort ackedCommand, byte status)> AckReceived;
     public event EventHandler<int> FingerTestResponseReceived;
-    public event EventHandler<byte[]> DataPacketReceived;  // Fired when DATA (0x0800) packets arrive
+    public event EventHandler<(byte[] packet, int transactionId, ushort commandId)> DataPacketReceived;  // Fired when DATA (0x0800) packets arrive with transaction ID for ACK
 
     public class TelemetryData
     {
@@ -65,19 +65,23 @@ public class TelemetryHandler
 
         // Need at least 24 bytes for header
         if (_receiveBuffer.Count < 24)
+        {
+            Console.WriteLine($"[Telemetry] Buffer has {_receiveBuffer.Count} bytes, need at least 24 for header");
             return false;
+        }
 
         // Look for packet start marker (0xBB 0xBB)
         if (_receiveBuffer[0] != 0xBB || _receiveBuffer[1] != 0xBB)
         {
             // Invalid header, skip one byte and try again
-            Console.WriteLine($"[Telemetry] Invalid magic, skipping byte: 0x{_receiveBuffer[0]:X2}");
+            Console.WriteLine($"[Telemetry] Invalid magic, skipping byte: 0x{_receiveBuffer[0]:X2} (buffer has {_receiveBuffer.Count} bytes)");
             _receiveBuffer.RemoveAt(0);
             return false;
         }
 
         // Read length field (bytes 16-17, little-endian)
         int packetLength = _receiveBuffer[16] | (_receiveBuffer[17] << 8);
+        Console.WriteLine($"[Telemetry] Found valid magic, packet length: {packetLength} bytes");
 
         // Validate length
         if (packetLength < 24 || packetLength > 2048)
@@ -91,20 +95,25 @@ public class TelemetryHandler
         if (_receiveBuffer.Count < packetLength)
         {
             // Not enough data yet
+            Console.WriteLine($"[Telemetry] Incomplete packet: have {_receiveBuffer.Count} bytes, need {packetLength}");
             return false;
         }
 
         // Extract packet
         packet = _receiveBuffer.GetRange(0, packetLength).ToArray();
+        Console.WriteLine($"[Telemetry] Extracted packet: {WatchPatProtocol.ByteArrayToHex(packet)}");
         _receiveBuffer.RemoveRange(0, packetLength);
+        Console.WriteLine($"[Telemetry] Buffer now has {_receiveBuffer.Count} bytes remaining");
 
         // Verify CRC-16
+        Console.WriteLine($"[Telemetry] Verifying CRC...");
         if (!VerifyCrc16(packet))
         {
-            Console.WriteLine($"[Telemetry] CRC failed for packet: {WatchPatProtocol.ByteArrayToHex(packet)}");
+            Console.WriteLine($"[Telemetry] ✗ CRC FAILED for packet");
             return false;
         }
 
+        Console.WriteLine($"[Telemetry] ✓ CRC verified successfully");
         return true;
     }
 
@@ -164,7 +173,7 @@ public class TelemetryHandler
         PacketReceived?.Invoke(this, packet);
 
         // Parse packet
-        var telemetry = ParsePacket(commandId, transactionId, payload);
+        var telemetry = ParsePacket(commandId, transactionId, payload, packet);
         if (telemetry != null)
         {
             telemetry.RawData = packet;
@@ -175,7 +184,7 @@ public class TelemetryHandler
     /// <summary>
     /// Parse packet into telemetry data based on command ID
     /// </summary>
-    private TelemetryData ParsePacket(ushort commandId, int transactionId, byte[] payload)
+    private TelemetryData ParsePacket(ushort commandId, int transactionId, byte[] payload, byte[] packet)
     {
         var telemetry = new TelemetryData
         {
@@ -224,9 +233,8 @@ public class TelemetryHandler
 
                 // Notify listeners - pass the FULL packet (header + payload) for saving
                 // Android app saves complete packets to file without parsing
-                byte[] fullPacket = new byte[24 + (payload?.Length ?? 0)];
-                Array.Copy(telemetry.RawData, 0, fullPacket, 0, fullPacket.Length);
-                DataPacketReceived?.Invoke(this, fullPacket);
+                // Pass packet, transaction ID, and command ID so caller can send ACK
+                DataPacketReceived?.Invoke(this, (packet, transactionId, commandId));
                 break;
 
             case 0x0900: // END_OF_TEST_DATA
@@ -335,15 +343,131 @@ public class TelemetryHandler
 
     private void ParseTelemetryData(byte[] payload, TelemetryData telemetry)
     {
-        if (payload != null && payload.Length >= 8)
-        {
-            // Parse telemetry data payload (SpO2, pulse rate, etc.)
-            // Exact format depends on device firmware version
-            telemetry.ParsedData["SpO2"] = payload[0];
-            telemetry.ParsedData["PulseRate"] = payload[1];
+        if (payload == null || payload.Length < 3)
+            return;
 
-            Console.WriteLine($"[Telemetry] Data - SpO2: {payload[0]}%, Pulse: {payload[1]} bpm");
+        Console.WriteLine($"\n[Telemetry] ═══ DATA Packet Breakdown ═══");
+        Console.WriteLine($"[Telemetry] Total Payload: {payload.Length} bytes");
+
+        // First 3 bytes appear to be header
+        Console.WriteLine($"[Telemetry] Packet Header: {payload[0]:X2} {payload[1]:X2} {payload[2]:X2}");
+        telemetry.ParsedData["PacketType"] = payload[0];
+        telemetry.ParsedData["PacketSubtype"] = payload[1];
+
+        // Find and extract all AA AA frames
+        var frames = ExtractFrames(payload, 0xAA, 0xAA);
+        if (frames.Count > 0)
+        {
+            Console.WriteLine($"[Telemetry] Found {frames.Count} data frames (AA AA markers):");
+            for (int i = 0; i < frames.Count; i++)
+            {
+                var frame = frames[i];
+                Console.WriteLine($"[Telemetry]   Frame {i + 1}: {frame.Length} bytes");
+                if (frame.Length > 0)
+                {
+                    // Show first few bytes to identify frame type
+                    int previewLen = Math.Min(16, frame.Length);
+                    string preview = string.Join(" ", frame.Take(previewLen).Select(b => b.ToString("X2")));
+                    Console.WriteLine($"[Telemetry]     Start: {preview}{(frame.Length > previewLen ? "..." : "")}");
+
+                    // Try to identify frame type by first byte after AA AA
+                    if (frame.Length >= 2)
+                    {
+                        byte frameId = frame[0];
+                        byte frameType = frame[1];
+                        Console.WriteLine($"[Telemetry]     Type: {frameId:X2} {frameType:X2}");
+                    }
+                }
+            }
         }
+
+        // Find and extract all DD DD samples
+        var samples = ExtractFrames(payload, 0xDD, 0xDD);
+        if (samples.Count > 0)
+        {
+            Console.WriteLine($"[Telemetry] Found {samples.Count} samples (DD DD markers):");
+            for (int i = 0; i < samples.Count; i++)
+            {
+                var sample = samples[i];
+                Console.WriteLine($"[Telemetry]   Sample {i + 1}: {sample.Length} bytes");
+                if (sample.Length >= 14)
+                {
+                    // Parse sample fields (reverse-engineered structure)
+                    ushort timestamp = (ushort)(sample[0] | (sample[1] << 8));
+                    byte value1 = sample[2];
+                    byte value2 = sample[3];
+                    ushort value3 = (ushort)(sample[4] | (sample[5] << 8));
+                    ushort value4 = (ushort)(sample[6] | (sample[7] << 8));
+                    ushort value5 = (ushort)(sample[8] | (sample[9] << 8));
+                    ushort value6 = (ushort)(sample[10] | (sample[11] << 8));
+
+                    Console.WriteLine($"[Telemetry]     Time: {timestamp} | Val1: {value1:X2} | Val2: {value2:X2}");
+                    Console.WriteLine($"[Telemetry]     Data: {value3} | {value4} | {value5} | {value6:X4}");
+
+                    // Store parsed values
+                    telemetry.ParsedData[$"Sample{i + 1}_Timestamp"] = timestamp;
+                    telemetry.ParsedData[$"Sample{i + 1}_Value1"] = value1;
+                    telemetry.ParsedData[$"Sample{i + 1}_Value2"] = value2;
+                }
+                else
+                {
+                    // Show full sample if short
+                    string sampleHex = string.Join(" ", sample.Select(b => b.ToString("X2")));
+                    Console.WriteLine($"[Telemetry]     Data: {sampleHex}");
+                }
+            }
+        }
+
+        Console.WriteLine($"[Telemetry] ═══════════════════════════════\n");
+    }
+
+    /// <summary>
+    /// Extract all frames/samples separated by a 2-byte marker
+    /// </summary>
+    private List<byte[]> ExtractFrames(byte[] data, byte marker1, byte marker2)
+    {
+        var frames = new List<byte[]>();
+
+        for (int i = 0; i < data.Length - 1; i++)
+        {
+            if (data[i] == marker1 && data[i + 1] == marker2)
+            {
+                // Found marker, find next marker or end of data
+                int nextMarkerPos = -1;
+                for (int j = i + 2; j < data.Length - 1; j++)
+                {
+                    if (data[j] == marker1 && data[j + 1] == marker2)
+                    {
+                        nextMarkerPos = j;
+                        break;
+                    }
+                }
+
+                // Extract frame (skip the marker itself)
+                int frameStart = i + 2;
+                int frameEnd = (nextMarkerPos != -1) ? nextMarkerPos : data.Length;
+                int frameLength = frameEnd - frameStart;
+
+                if (frameLength > 0)
+                {
+                    byte[] frame = new byte[frameLength];
+                    Array.Copy(data, frameStart, frame, 0, frameLength);
+                    frames.Add(frame);
+                }
+
+                // Skip to next marker position if found
+                if (nextMarkerPos != -1)
+                {
+                    i = nextMarkerPos - 1; // -1 because loop will increment
+                }
+                else
+                {
+                    break; // No more markers
+                }
+            }
+        }
+
+        return frames;
     }
 
     /// <summary>

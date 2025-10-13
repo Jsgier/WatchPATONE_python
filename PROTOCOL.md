@@ -59,7 +59,10 @@ From Connected Menu:
 - ✅ 20-byte chunking - Proper BLE MTU handling
 
 **Implemented Features:**
-- ✅ Start/Stop sleep sessions (START_SESSION 0x0100, STOP_ACQUISITION 0x0700)
+- ✅ Start/Stop sleep sessions with proper 2-command sequence:
+  - START_SESSION (0x0100) - Sets up session parameters
+  - START_ACQUISITION (0x0600) - Triggers actual data collection **[CRITICAL FIX]**
+  - STOP_ACQUISITION (0x0700) - Ends session
 - ✅ Request device technical status (TECHNICAL_STATUS_REQUEST 0x1500)
 - ✅ Receive and save DATA packets (0x0800) to file
 - ✅ Request stored data from device flash (SEND_STORED_DATA 0x1000)
@@ -67,6 +70,13 @@ From Connected Menu:
 - ✅ Device reset command (RESET_DEVICE 0x0B00)
 - ✅ Complete menu-driven interactive console
 - ✅ Event-driven packet processing with async/await pattern
+
+**IMPORTANT Android Workflow Discovery:**
+The Android app sends TWO commands to start data acquisition:
+1. **START_SESSION (0x0100)** - Configures session (mobile ID, mode, OS version)
+2. **START_ACQUISITION (0x0600)** - Actually triggers data collection from sensors
+
+The C# implementation was originally missing the START_ACQUISITION command, which may have prevented DATA packets from being received. This has been fixed in `WatchPatDevice.StartSleepStudyAsync()`.
 
 ---
 

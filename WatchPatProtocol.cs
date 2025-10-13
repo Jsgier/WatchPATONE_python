@@ -157,6 +157,39 @@ public static class WatchPatProtocol
     }
 
     /// <summary>
+    /// Create ACK command to acknowledge received packets
+    /// From DeviceCommands.java line 499-508 (AckPacket)
+    /// ACK Status Codes:
+    ///   0 = ACK_OK
+    ///   1 = ACK_CRC_ERR
+    ///   2 = ACK_ILLEGAL_OP_CODE
+    ///   3 = ACK_NON_UNIQ_ID
+    ///   4 = ACK_INVALID_PARAM
+    /// </summary>
+    /// <param name="ackedCommandId">The command ID being acknowledged</param>
+    /// <param name="status">ACK status (0 = OK)</param>
+    /// <param name="transactionId">Transaction ID from the packet being acknowledged</param>
+    public static WatchPatPacket CreateAckCommand(ushort ackedCommandId, byte status, int transactionId)
+    {
+        // ACK payload: [AckedCmdId:2 bytes][Status:1 byte][Reserved:2 bytes]
+        // AckedCmdId needs byte reversal (like we do for all command IDs)
+        ushort reversedCmdId = (ushort)((ackedCommandId >> 8) | (ackedCommandId << 8));
+
+        var payload = new byte[5];
+        payload[0] = (byte)(reversedCmdId & 0xFF);
+        payload[1] = (byte)(reversedCmdId >> 8);
+        payload[2] = status;
+        payload[3] = 0; // Reserved
+        payload[4] = 0; // Reserved
+
+        return new WatchPatPacket(
+            WatchPatPacket.CommandId.Ack,
+            payload,
+            transactionId: transactionId
+        );
+    }
+
+    /// <summary>
     /// Create RESET DEVICE command
     /// From DeviceCommands.java line 482-486 (ResetCommandPacket)
     /// </summary>

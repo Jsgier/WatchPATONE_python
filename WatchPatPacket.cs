@@ -16,6 +16,7 @@ public class WatchPatPacket
     // Command IDs (from DeviceCommands.java)
     public enum CommandId : ushort
     {
+        Ack = 0x0000,                    // 0 decimal - ACK packet
         StartSession = 0x0100,           // 256 decimal - SessionStartCommandPacket
         StopAcquisition = 0x0700,        // 1792
         StartAcquisition = 0x0600,       // 1536
@@ -80,13 +81,13 @@ public class WatchPatPacket
     private byte[] _builtPacket;
     private static int _nextTransactionId = 1;
 
-    public WatchPatPacket(CommandId commandId, byte[] payload = null, ushort flags = 0, long timestamp = 0)
+    public WatchPatPacket(CommandId commandId, byte[] payload = null, ushort flags = 0, long timestamp = 0, int? transactionId = null)
     {
         _header = new Header
         {
             CommandId = (ushort)commandId,
             Timestamp = timestamp,
-            TransactionId = GetNextTransactionId(),
+            TransactionId = transactionId ?? GetNextTransactionId(),  // Use provided ID or generate new one
             Length = (ushort)(24 + (payload?.Length ?? 0)),
             Flags = flags
         };
