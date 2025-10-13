@@ -8,25 +8,36 @@ This document maps the complete Bluetooth Low Energy workflow from device discov
 
 ## 🚀 Quick Start - C# Implementation
 
-**Location**: `C:\source\watchpat\java\sources\com\itamarmedical\patnet\WatchPatBLE\`
+**Location**: `C:\source\itamar\WatchPATONERE`
 
 **Status**: ✅ **VERIFIED AND WORKING** with physical WatchPAT device
 
 ### Build and Run
 
 ```bash
-cd C:\source\watchpat\java\sources\com\itamarmedical\patnet\WatchPatBLE
+cd C:\source\itamar\WatchPATONERE
 dotnet build
 dotnet run
 ```
 
 ### Testing Commands
 
+From Main Menu (not connected):
 1. **Scan** (option 1) - Find ITAMAR_ devices
 2. **Connect** (option 2) - Connect to device (auto-sends IS_DEVICE_PAIRED)
-3. **LED Test** (options 5-7) - Verify protocol (LED turns on/off - PROVEN WORKING!)
-4. **Status** (option 3) - Request device technical status
-5. **Sleep Study** (option 1) - Start recording session
+
+From Connected Menu:
+1. **Start Sleep Study** (option 1) - Start recording session
+2. **Receive Study Data** (option 2) - Save live DATA packets (0x0800) to file
+3. **Stop Session** (option 3) - End current recording
+4. **Request Status** (option 4) - Request device technical status
+5. **Finger Probe Test** (option 5) - Test finger probe detection
+6. **Monitor Telemetry** (option 6) - Watch incoming packets for 30 seconds
+7. **LED Test** (options 7-9) - Verify protocol (LED turns on/off - PROVEN WORKING!)
+   - Option 7: Turn LEDs ON
+   - Option 8: Turn LEDs OFF
+   - Option 9: Blink pattern (5 cycles)
+8. **Request Stored Data** (option 'r') - Download completed recording from device flash
 
 ### Key Files
 
@@ -47,11 +58,130 @@ dotnet run
 - ✅ CRC-16 validation - All packets accepted by device
 - ✅ 20-byte chunking - Proper BLE MTU handling
 
-**Ready to Use:**
-- Start/Stop sleep sessions
-- Request device status
-- Receive telemetry data
-- All device commands from `DeviceCommands.java`
+**Implemented Features:**
+- ✅ Start/Stop sleep sessions (START_SESSION 0x0100, STOP_ACQUISITION 0x0700)
+- ✅ Request device technical status (TECHNICAL_STATUS_REQUEST 0x1500)
+- ✅ Receive and save DATA packets (0x0800) to file
+- ✅ Request stored data from device flash (SEND_STORED_DATA 0x1000)
+- ✅ Finger probe detection test (START_FINGER_DETECTION 0x2500)
+- ✅ Device reset command (RESET_DEVICE 0x0B00)
+- ✅ Complete menu-driven interactive console
+- ✅ Event-driven packet processing with async/await pattern
+
+---
+
+## 📋 Quick Reference
+
+### BLE Service UUIDs
+
+| UUID | Type | Purpose |
+|------|------|---------|
+| `6e400001-b5a3-f393-e0a9-e50e24dcca9e` | Service | Nordic UART Service |
+| `6e400002-b5a3-f393-e0a9-e50e24dcca9e` | TX Characteristic | Write commands to device (WriteWithoutResponse) |
+| `6e400003-b5a3-f393-e0a9-e50e24dcca9e` | RX Characteristic | Receive notifications from device (Notify) |
+| `00002902-0000-1000-8000-00805f9b34fb` | CCCD Descriptor | Client Characteristic Configuration |
+
+### Packet Structure (24-byte header)
+
+```
+Offset  Size  Field           Description
+------  ----  -----           -----------
+0-1     2     Magic           0xBBBB (fixed)
+2-3     2     CommandId       Command/response ID (byte-reversed)
+4-11    8     Timestamp       Unix seconds (byte-reversed)
+12-15   4     TransactionId   Auto-incremented ID (pre-reversed in Java)
+16-17   2     Length          Total packet length (pre-reversed in Java)
+18-19   2     Flags           Packet flags
+20-21   2     Zero            Reserved (always 0)
+22-23   2     CRC             CRC-16-CCITT checksum (pre-reversed in Java)
+[24+]   var   Payload         Command-specific data
+```
+
+**Critical**: Packets split into 20-byte chunks with 10ms delay between chunks.
+
+### Command IDs Reference
+
+| Command ID | Decimal | Direction | Name | Purpose |
+|------------|---------|-----------|------|---------|
+| **Outgoing Commands** |
+| 0x0100 | 256 | → Device | START_SESSION | Start sleep study recording |
+| 0x0600 | 1536 | → Device | START_ACQUISITION | Start data acquisition |
+| 0x0700 | 1792 | → Device | STOP_ACQUISITION | Stop current session |
+| 0x0B00 | 2816 | → Device | RESET_DEVICE | Soft/hard reset |
+| 0x1000 | 4096 | → Device | SEND_STORED_DATA | Request flash data |
+| 0x1500 | 5376 | → Device | TECHNICAL_STATUS_REQUEST | Get device status |
+| 0x2300 | 8960 | → Device | SET_LEDS | Control LEDs (0x00=off, 0xFF=on) |
+| 0x2500 | 9472 | → Device | START_FINGER_DETECTION | Test finger probe |
+| 0x2A00 | 10752 | → Device | IS_DEVICE_PAIRED | Check pairing (REQUIRED after connect) |
+| **Incoming Responses** |
+| 0x0000 | 0 | ← Device | ACK | Command acknowledgment + status |
+| 0x0200 | 512 | ← Device | START_SESSION_CONFIRM | Session started OK |
+| 0x0800 | 2048 | ← Device | DATA | Telemetry data (SpO2, pulse, etc.) |
+| 0x0900 | 2304 | ← Device | END_OF_TEST_DATA | Recording ended |
+| 0x0A00 | 2560 | ← Device | ERROR_STATUS | Device error (battery, flash) |
+| 0x1600 | 5632 | ← Device | TECHNICAL_STATUS_REPORT | Status response |
+| 0x2600 | 9728 | ← Device | FINGER_TEST_RESPONSE | Finger test result |
+| 0x2B00 | 11008 | ← Device | IS_DEVICE_PAIRED_RESPONSE | Pairing status |
+
+### Connection Sequence
+
+```
+1. Scan for BLE devices with name prefix "ITAMAR_"
+2. Connect to GATT server
+3. Discover Nordic UART Service (6e400001-...)
+4. Enable notifications on RX characteristic (6e400003)
+5. WAIT 1000ms for device stabilization
+6. Send IS_DEVICE_PAIRED (0x2A00) command ← REQUIRED!
+7. Wait for ACK or IS_DEVICE_PAIRED_RESPONSE
+8. Device ready for operational commands
+```
+
+### Device Naming Convention
+
+| Format | Example | Meaning |
+|--------|---------|---------|
+| `ITAMAR_[HEX]` | `ITAMAR_1A2B3C` | Standard/paired device |
+| `ITAMAR_[HEX]N` | `ITAMAR_1A2B3CN` | New/unpaired device (N suffix) |
+
+**Serial Number Conversion**: Hex → 9-digit decimal
+- Example: `ITAMAR_1A2B3CN` → `0x1A2B3C` = `1715004` → `000001715004` (padded)
+
+### CRC-16-CCITT Calculation
+
+```
+Algorithm: CRC-16-CCITT
+Polynomial: 0x1021
+Initial Value: 0xFFFF
+Input: Entire packet with CRC field set to 0x0000
+Output: 16-bit checksum (pre-reversed in Java before writing)
+```
+
+### Critical Timing Values
+
+| Operation | Delay | Purpose |
+|-----------|-------|---------|
+| Post-connection wait | 1000ms | Device stabilization |
+| Between chunks | 10ms | BLE flow control |
+| Command retry interval | 2000ms | Wait before retry |
+| Command timeout | 10000ms | Total timeout per command |
+| Scan duration | 5000-10000ms | Device discovery |
+
+### Byte Ordering Rules (CRITICAL!)
+
+**In C# WatchPatPacket.cs Header.ToBytes():**
+
+| Field | Reverse? | Reason |
+|-------|----------|--------|
+| Magic (0xBBBB) | ✅ YES | Not pre-reversed in Java |
+| CommandId | ✅ YES | Not pre-reversed in Java |
+| Timestamp | ✅ YES | IS pre-reversed in Java, but needs full reversal |
+| TransactionId | ❌ NO | Pre-reversed with `Integer.reverseBytes()` |
+| Length | ❌ NO | Pre-reversed with `Short.reverseBytes()` |
+| Flags | ❌ NO | Simple 16-bit value |
+| Zero | ❌ NO | Always 0x0000 |
+| CRC | ❌ NO | Pre-reversed with `Short.reverseBytes()` |
+
+**Why**: Java `ByteBuffer` writes big-endian but pre-reverses some fields. C# `BitConverter` writes little-endian natively. Must match Java's final byte output!
 
 ---
 
@@ -1002,16 +1132,16 @@ flowchart TD
     AutoReconnect --> ConnectResult{Connect<br/>success?}
 
     ConnectResult -->|Yes| SetReconnecting[Set M=true<br/>Reconnecting flag]
-    ConnectResult -->|No| StartScan[e() - clearConnectionState<br/>Start BLE scan]
+    ConnectResult -->|No| StartScan[e - clearConnectionState<br/>Start BLE scan]
 
     SetReconnecting --> WaitConnect[Wait for<br/>onConnectionStateChange]
 
     StartScan --> CheckBT{BT<br/>enabled?}
 
-    CheckBT -->|Yes| EnableScanCycle[F(true)<br/>Enable scan cycle]
+    CheckBT -->|Yes| EnableScanCycle[F true<br/>Enable scan cycle]
     CheckBT -->|No| LogError[Log: BT disabled]
 
-    EnableScanCycle --> StartCycle[k() - Start scan cycle thread]
+    EnableScanCycle --> StartCycle[k - Start scan cycle thread]
 
     StartCycle --> Scanning([Scanning for device])
     WaitConnect --> Reconnected([Reconnected])
@@ -1229,15 +1359,15 @@ flowchart TD
     Type -->|Command Timeout| CmdTimeout[10s no ACK]
 
     ConnTimeout --> CheckState{Connection<br/>state?}
-    CheckState -->|Connecting| Disconnect1[e() - Clear state<br/>d() - Restart connection]
+    CheckState -->|Connecting| Disconnect1[e - Clear state<br/>d - Restart connection]
     CheckState -->|Connected| Continue[Do nothing]
 
     WriteError --> Retry1{Retry count<br/>< 5?}
     Retry1 -->|Yes| Wait1[Wait 2000ms<br/>Retry write]
-    Retry1 -->|No| Disconnect2[e() - Clear state<br/>Start scan]
+    Retry1 -->|No| Disconnect2[e - Clear state<br/>Start scan]
 
     ServiceError --> CloseGatt[Close GATT<br/>Log error]
-    CloseGatt --> Disconnect3[e() - Clear state<br/>Report to UI]
+    CloseGatt --> Disconnect3[e - Clear state<br/>Report to UI]
 
     DeviceError --> ParseError{Error code}
     ParseError -->|17| Battery[Battery error<br/>Cannot start session]
@@ -1249,7 +1379,7 @@ flowchart TD
     CheckQueue -->|Yes| CheckSession{Session<br/>active?}
     CheckQueue -->|No| Done1[Already handled]
 
-    CheckSession -->|No| Rescan[e() - Clear state<br/>k() - Start scan cycle]
+    CheckSession -->|No| Rescan[e - Clear state<br/>k - Start scan cycle]
     CheckSession -->|Yes| Done2[Continue session]
 
     Wait1 --> End([Continue])
@@ -1332,7 +1462,7 @@ flowchart TD
 
 **PROTOCOL VERIFIED AND WORKING!**
 
-The C# implementation in `WatchPatBLE/` successfully:
+The C# implementation successfully:
 - ✅ Connects to WatchPAT devices via Nordic UART Service
 - ✅ Sends commands with proper 24-byte headers and CRC-16
 - ✅ Receives and parses ACK responses
@@ -1429,10 +1559,30 @@ The C# implementation in `WatchPatBLE/` successfully:
 
 ---
 
-**Document Version**: 2.0
+**Document Version**: 2.1
 **Based on**: Android BLEService.java decompiled source + C# verified implementation
-**Platform**: Android with Windows.Devices.Bluetooth equivalents for C#
+**Platform**: Android (reference) and .NET 9.0 with Windows.Devices.Bluetooth APIs
 **Protocol Version**: WatchPAT firmware 2.x+
-**Last Updated**: 2025 - Protocol implementation verified with physical device
+**Last Updated**: January 2025 - Protocol implementation verified with physical WatchPAT device
 **Total Development Time**: ~4 hours from initial implementation to LED verification
+
+## C# Implementation Mapping
+
+The .NET implementation mirrors the Android architecture with these equivalents:
+
+| Android Component | C# Equivalent | Purpose |
+|-------------------|---------------|---------|
+| BLEService.java | WatchPatDevice.cs | Device connection and command transmission |
+| DeviceCommands.java | WatchPatProtocol.cs + WatchPatPacket.cs | Command builders and packet structure |
+| IncomingPacketHandler.java | TelemetryHandler.cs | Response packet parsing and routing |
+| BluetoothLeScanner | BleDeviceScanner.cs | Device discovery via advertisements |
+| CommandTasker.java | Built into WatchPatDevice.cs | Command queuing with retry logic |
+| MainActivity | Program.cs | Interactive user interface |
+
+**Key Differences:**
+- C# implementation uses event-driven async/await pattern instead of Java threads
+- No separate command queue class - integrated into WatchPatDevice
+- TaskCompletionSource used for command/response correlation instead of callback queues
+- Windows.Devices.Bluetooth APIs replace Android BluetoothGatt
+- Single-file packet implementation (WatchPatPacket.cs) vs multiple Java classes
 

@@ -16,7 +16,6 @@ c:\source\itamar
 |- javasrc
 |- WatchPATONERE
 |- com.itamarmedical.watchpat.apk
-|- .claude
 ```
 
 ### Get APK
@@ -40,12 +39,11 @@ c:\source\itamar
 
 ## Development
 
-1. Start `claude` in ``C:\source\itamar\WatchPATONERE`.
+1. Start `claude` in `C:\source\itamar\WatchPATONERE`.
 
 ### Building
 
 ```bash
-cd WatchPatBLE
 dotnet restore
 dotnet build
 ```
@@ -56,37 +54,21 @@ dotnet build
 dotnet run
 ```
 
-## Technical Details
+## Protocol Overview
 
-### BLE Protocol
+This application implements the ITAMAR WatchPAT BLE protocol using Nordic UART Service with 24-byte packet headers and CRC-16-CCITT validation.
 
-The application implements the ITAMAR WatchPAT BLE protocol:
+**Key Features:**
+- ✅ Device discovery and connection
+- ✅ LED control (physically verified)
+- ✅ Sleep study session management
+- ✅ Data packet reception and file saving
+- ✅ Finger probe detection testing
+- ✅ Device status monitoring
 
-- **Service UUID**: `6e400001-b5a3-f393-e0a9-e50e24dcca9e` (Nordic UART Service)
-- **TX Characteristic**: `6e400002-b5a3-f393-e0a9-e50e24dcca9e` (Write)
-- **RX Characteristic**: `6e400003-b5a3-f393-e0a9-e50e24dcca9e` (Notify)
-
-### Command Protocol
-
-Commands use a custom binary protocol:
-```
-[Header: 0x55 0xAA] [Command ID] [Data Length] [Data...] [Checksum]
-```
-
-Supported commands:
-- `0x10`: Start Session
-- `0x11`: Stop Session
-- `0x20`: Get Status
-- `0x30`: Telemetry Data (received)
-- `0x40`: Device Info (received)
-
-### Device Naming Convention
-
-Devices broadcast with name format:
-- `ITAMAR_[HEX]` - Standard device
-- `ITAMAR_[HEX]N` - New/unregistered device
-
-The hex portion converts to a 9-digit decimal serial number.
+**For detailed technical documentation, see:**
+- **[PROTOCOL.md](PROTOCOL.md)** - Complete protocol specification with sequence diagrams, packet formats, command IDs, timing requirements, and debugging notes
+- **[CLAUDE.md](CLAUDE.md)** - Architecture overview and development guidelines for Claude Code
 
 ## References
 
