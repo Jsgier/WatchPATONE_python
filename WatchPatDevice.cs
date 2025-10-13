@@ -233,8 +233,9 @@ public class WatchPatDevice : IDisposable
     }
 
     /// <summary>
-    /// Start a sleep study session with proper initialization
-    /// Sends both START_SESSION and START_ACQUISITION commands (matching Android workflow)
+    /// Start a sleep study session (configuration only)
+    /// Sends START_SESSION command to configure the session
+    /// Call ReceiveStudyDataAsync() to start data acquisition
     /// </summary>
     public async Task<bool> StartSleepStudyAsync()
     {
@@ -246,7 +247,7 @@ public class WatchPatDevice : IDisposable
 
         try
         {
-            Console.WriteLine($"[Device] Starting sleep study session...");
+            Console.WriteLine($"[Device] Configuring sleep study session...");
 
             // IMPORTANT: Wait for device to be fully ready (Android app waits 1000ms)
             Console.WriteLine($"[Device] Waiting for device to initialize...");
@@ -260,8 +261,9 @@ public class WatchPatDevice : IDisposable
             // Generate mobile ID (simplified version)
             int mobileId = WatchPatProtocol.GenerateMobileId("DESKTOP");
 
-            // STEP 1: Send START_SESSION (0x0100) - Sets up session parameters
-            Console.WriteLine($"[Device] Step 1/2: Sending START_SESSION command (0x0100)...");
+            // Send START_SESSION (0x0100) - Sets up session parameters
+            Console.WriteLine($"[Device] Sending START_SESSION command (0x0100)...");
+            Console.WriteLine($"[Device] This configures the session but does not start data acquisition");
 
             var sessionPacket = WatchPatProtocol.CreateStartSessionCommand(
                 mobileId,
@@ -269,57 +271,56 @@ public class WatchPatDevice : IDisposable
                 "Windows/10.0"
             );
 
+            // Create TaskCompletionSource to wait for START_SESSION_CONFIRM
+            var confirmCompletionSource = new TaskCompletionSource<bool>();
+
+            // Subscribe to telemetry events to catch START_SESSION_CONFIRM (0x0200)
+            EventHandler<TelemetryHandler.TelemetryData> confirmHandler = null;
+            confirmHandler = (sender, telemetry) =>
+            {
+                if (telemetry.PacketType == "START_SESSION_CONFIRM")
+                {
+                    // Unsubscribe immediately
+                    _telemetryHandler.TelemetryDataReceived -= confirmHandler;
+                    Console.WriteLine($"[Device] ✓ START_SESSION_CONFIRM received");
+                    confirmCompletionSource.TrySetResult(true);
+                }
+            };
+
+            _telemetryHandler.TelemetryDataReceived += confirmHandler;
+
             bool sessionSuccess = await WriteCommandAsync(sessionPacket, "START_SESSION");
 
             if (!sessionSuccess)
             {
+                _telemetryHandler.TelemetryDataReceived -= confirmHandler;
                 Console.WriteLine($"[Device] ✗ Failed to send START_SESSION command");
                 return false;
             }
 
             Console.WriteLine($"[Device] ✓ START_SESSION command sent successfully");
-            Console.WriteLine($"[Device] Waiting for device to process session setup...");
+            Console.WriteLine($"[Device] Waiting for START_SESSION_CONFIRM (0x0200)...");
 
-            // Wait for device to process START_SESSION
-            await Task.Delay(2000);
+            // Wait for confirmation with 10 second timeout
+            var confirmTask = confirmCompletionSource.Task;
+            var timeoutTask = Task.Delay(10000);
+            var completedTask = await Task.WhenAny(confirmTask, timeoutTask);
 
-            // STEP 2: Send START_ACQUISITION (0x0600) - Actually begins data collection
-            // This is what Android app does in TransactionService.h()
-            Console.WriteLine($"[Device] Step 2/2: Sending START_ACQUISITION command (0x0600)...");
-            Console.WriteLine($"[Device] This command triggers actual data collection");
+            // Unsubscribe if timeout occurred
+            _telemetryHandler.TelemetryDataReceived -= confirmHandler;
 
-            var acquisitionPacket = WatchPatProtocol.CreateStartAcquisitionCommand();
-            bool acquisitionSuccess = await WriteCommandAsync(acquisitionPacket, "START_ACQUISITION");
-
-            if (!acquisitionSuccess)
+            if (completedTask == confirmTask && confirmTask.Result)
             {
-                Console.WriteLine($"[Device] ✗ Failed to send START_ACQUISITION command");
-                Console.WriteLine($"[Device] Session may be configured but not actively collecting data");
-                return false;
-            }
-
-            Console.WriteLine($"[Device] ✓ START_ACQUISITION command sent successfully");
-            Console.WriteLine($"[Device] Waiting for device response...");
-
-            // Wait for device response/acknowledgment
-            await Task.Delay(3000);
-
-            // Check if still connected or if device intentionally disconnected
-            if (_isConnected)
-            {
-                Console.WriteLine($"[Device] ✓ Device remains connected - session active");
-                Console.WriteLine($"[Device] Device is now collecting data");
-                Console.WriteLine($"[Device] You can now use 'Receive Study Data' to capture live data");
+                Console.WriteLine($"[Device] ✓ Session configured successfully");
+                Console.WriteLine($"[Device] Next step: Use 'Receive Study Data' to start data acquisition");
+                return true;
             }
             else
             {
-                Console.WriteLine($"[Device] ℹ Device disconnected after start commands");
-                Console.WriteLine($"[Device] This is NORMAL - device conserves battery during recording");
-                Console.WriteLine($"[Device] Device will operate autonomously for 8+ hours");
-                Console.WriteLine($"[Device] Reconnect later to retrieve data");
+                Console.WriteLine($"[Device] ⚠ START_SESSION_CONFIRM timeout after 10 seconds");
+                Console.WriteLine($"[Device] Session may not be properly configured");
+                return false;
             }
-
-            return true;
         }
         catch (Exception ex)
         {
@@ -387,8 +388,9 @@ public class WatchPatDevice : IDisposable
     }
 
     /// <summary>
-    /// Receive live study data from device and save to file
-    /// Device must have an active recording session
+    /// Start data acquisition and receive live study data from device
+    /// Sends START_ACQUISITION command then saves incoming data to file
+    /// Session must be configured first with StartSleepStudyAsync()
     /// </summary>
     /// <param name="durationSeconds">How long to receive data (0 = until stopped manually)</param>
     public async Task<(int packetCount, long bytesReceived)> ReceiveStudyDataAsync(int durationSeconds = 60)
@@ -401,12 +403,33 @@ public class WatchPatDevice : IDisposable
 
         try
         {
+            // Send START_ACQUISITION (0x0600) - Actually begins data collection
+            Console.WriteLine($"[Device] Sending START_ACQUISITION command (0x0600)...");
+            Console.WriteLine($"[Device] This command triggers actual data collection from the device");
+
+            var acquisitionPacket = WatchPatProtocol.CreateStartAcquisitionCommand();
+            bool acquisitionSuccess = await WriteCommandAsync(acquisitionPacket, "START_ACQUISITION");
+
+            if (!acquisitionSuccess)
+            {
+                Console.WriteLine($"[Device] ✗ Failed to send START_ACQUISITION command");
+                Console.WriteLine($"[Device] Cannot start data reception without acquisition command");
+                return (0, 0);
+            }
+
+            Console.WriteLine($"[Device] ✓ START_ACQUISITION command sent successfully");
+            Console.WriteLine($"[Device] Waiting for device to begin sending data...");
+            Console.WriteLine();
+
+            // Wait for device to start sending data
+            await Task.Delay(2000);
+
             // Create data file with timestamp
             string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             string filename = $"watchpat_data_{_serialNumber}_{timestamp}.dat";
             string filepath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), filename);
 
-            Console.WriteLine($"[Device] Starting live data reception...");
+            Console.WriteLine($"[Device] Ready to receive live data...");
             Console.WriteLine($"[Device] Saving to: {filepath}");
             Console.WriteLine($"[Device] Duration: {(durationSeconds > 0 ? durationSeconds + " seconds" : "Until stopped")}");
             Console.WriteLine();
@@ -806,6 +829,129 @@ public class WatchPatDevice : IDisposable
             Console.WriteLine($"[Device] Error resetting device: {ex.Message}");
             ErrorOccurred?.Invoke(this, ex);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Download device log file in chunks
+    /// From DeviceCommands.java GetLogFilePacket and IncomingPacketHandler.java lines 462-472
+    /// </summary>
+    public async Task<(bool success, int totalBytes)> DownloadDeviceLogAsync()
+    {
+        if (!_isConnected)
+        {
+            Console.WriteLine($"[Device] Cannot download log - not connected");
+            return (false, 0);
+        }
+
+        try
+        {
+            // Create log file with timestamp
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string filename = $"watchpat_log_{_serialNumber}_{timestamp}.bin";
+            string filepath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), filename);
+
+            Console.WriteLine($"[Device] Downloading device log...");
+            Console.WriteLine($"[Device] Saving to: {filepath}");
+            Console.WriteLine();
+
+            int offset = 0;
+            int totalBytes = 0;
+            bool isEOF = false;
+            System.IO.FileStream fileStream = null;
+
+            try
+            {
+                fileStream = new System.IO.FileStream(filepath, System.IO.FileMode.Create, System.IO.FileAccess.Write);
+
+                while (!isEOF)
+                {
+                    // Create completion source for this chunk
+                    var chunkCompletionSource = new TaskCompletionSource<(byte[] chunk, int bytesReceived)>();
+
+                    // Subscribe to log chunk event
+                    EventHandler<(byte[] chunk, int bytesReceived, int transactionId)> logHandler = null;
+                    logHandler = (sender, e) =>
+                    {
+                        var (chunk, bytesReceived, transactionId) = e;
+
+                        // Unsubscribe immediately
+                        _telemetryHandler.LogChunkReceived -= logHandler;
+
+                        // Signal that chunk was received
+                        chunkCompletionSource.TrySetResult((chunk, bytesReceived));
+                    };
+
+                    _telemetryHandler.LogChunkReceived += logHandler;
+
+                    // Send GetLogFile command with current offset
+                    Console.WriteLine($"[Device] Requesting log chunk at offset {offset}...");
+                    var packet = WatchPatProtocol.CreateGetLogFileCommand(offset);
+                    bool commandSent = await WriteCommandAsync(packet, $"GET_LOG_FILE (offset={offset})");
+
+                    if (!commandSent)
+                    {
+                        _telemetryHandler.LogChunkReceived -= logHandler;
+                        Console.WriteLine($"[Device] Failed to send GET_LOG_FILE command");
+                        return (false, totalBytes);
+                    }
+
+                    // Wait for chunk with 10 second timeout
+                    var chunkTask = chunkCompletionSource.Task;
+                    var timeoutTask = Task.Delay(10000);
+                    var completedTask = await Task.WhenAny(chunkTask, timeoutTask);
+
+                    // Unsubscribe if timeout occurred
+                    _telemetryHandler.LogChunkReceived -= logHandler;
+
+                    if (completedTask == chunkTask)
+                    {
+                        var (chunk, bytesReceived) = chunkTask.Result;
+
+                        // Write chunk to file
+                        fileStream.Write(chunk, 0, chunk.Length);
+                        fileStream.Flush();
+
+                        totalBytes += bytesReceived;
+                        Console.WriteLine($"[Device] ✓ Received {bytesReceived} bytes (total: {totalBytes} bytes)");
+
+                        // Check if EOF (chunk less than 2048 bytes means last chunk)
+                        if (bytesReceived < 2048)
+                        {
+                            isEOF = true;
+                            Console.WriteLine($"[Device] ✓ EOF reached (chunk size {bytesReceived} < 2048)");
+                        }
+                        else
+                        {
+                            // Increment offset for next chunk
+                            offset += 2048;
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[Device] ⚠ Log chunk timeout after 10 seconds");
+                        return (false, totalBytes);
+                    }
+                }
+
+                Console.WriteLine();
+                Console.WriteLine($"[Device] ✓ Device log download complete");
+                Console.WriteLine($"[Device] Total bytes: {totalBytes:N0}");
+                Console.WriteLine($"[Device] File saved: {filepath}");
+
+                return (true, totalBytes);
+            }
+            finally
+            {
+                fileStream?.Close();
+                fileStream?.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Device] Error downloading log: {ex.Message}");
+            ErrorOccurred?.Invoke(this, ex);
+            return (false, 0);
         }
     }
 

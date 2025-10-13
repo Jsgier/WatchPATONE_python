@@ -215,6 +215,38 @@ public static class WatchPatProtocol
     }
 
     /// <summary>
+    /// Create GET LOG FILE command
+    /// From DeviceCommands.java GetLogFilePacket
+    /// Downloads device log in 2048-byte chunks
+    /// </summary>
+    /// <param name="offset">Byte offset to start reading from (increments by 2048)</param>
+    public static WatchPatPacket CreateGetLogFileCommand(int offset)
+    {
+        // Payload: [Offset:4 bytes][ChunkSize:4 bytes]
+        // Java uses Integer.reverseBytes() before writing, so we do the same
+        var payload = new byte[8];
+
+        // Reverse bytes for offset (matches Java Integer.reverseBytes)
+        byte[] offsetBytes = BitConverter.GetBytes(offset);
+        payload[0] = offsetBytes[3];
+        payload[1] = offsetBytes[2];
+        payload[2] = offsetBytes[1];
+        payload[3] = offsetBytes[0];
+
+        // Reverse bytes for chunk size (always 2048)
+        byte[] sizeBytes = BitConverter.GetBytes(2048);
+        payload[4] = sizeBytes[3];
+        payload[5] = sizeBytes[2];
+        payload[6] = sizeBytes[1];
+        payload[7] = sizeBytes[0];
+
+        return new WatchPatPacket(
+            WatchPatPacket.CommandId.GetLogFile,
+            payload
+        );
+    }
+
+    /// <summary>
     /// Parse serial number from device name
     /// Device name format: ITAMAR_[HEX]N or ITAMAR_[HEX]
     /// </summary>

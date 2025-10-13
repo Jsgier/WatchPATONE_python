@@ -36,6 +36,7 @@ public class WatchPatPacket
         FWUpgradeRequest = 0x3000,       // 12288
         ResetReason = 0x3900,            // 14592
         GetLogFile = 0x4400,             // 17408
+        LogFileResponse = 0x4500,        // 17664
         SetNightsCounter = 0x4600        // 17920
     }
 

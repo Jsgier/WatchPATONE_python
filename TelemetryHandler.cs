@@ -19,6 +19,7 @@ public class TelemetryHandler
     public event EventHandler<(ushort ackedCommand, byte status)> AckReceived;
     public event EventHandler<int> FingerTestResponseReceived;
     public event EventHandler<(byte[] packet, int transactionId, ushort commandId)> DataPacketReceived;  // Fired when DATA (0x0800) packets arrive with transaction ID for ACK
+    public event EventHandler<(byte[] chunk, int bytesReceived, int transactionId)> LogChunkReceived;  // Fired when LOG_FILE_RESPONSE (0x4500) arrives
 
     public class TelemetryData
     {
@@ -304,6 +305,31 @@ public class TelemetryHandler
 
                     // Notify listeners that initialization response was received
                     DevicePairedResponseReceived?.Invoke(this, status != 0);
+                }
+                break;
+
+            case 0x4500: // LOG_FILE_RESPONSE
+                telemetry.PacketType = "LOG_FILE_RESPONSE";
+                if (payload != null && payload.Length >= 4)
+                {
+                    // Payload structure (from Java IncomingPacketHandler.java line 462-472):
+                    // Bytes 0-3: Chunk size (int, actual bytes in this chunk)
+                    // Bytes 4+: Log file data
+                    int bytesInChunk = BitConverter.ToInt32(payload, 0);
+                    // Reverse bytes (Java reads it reversed)
+                    bytesInChunk = ReverseInt32(bytesInChunk);
+
+                    telemetry.ParsedData["ChunkSize"] = bytesInChunk;
+                    telemetry.ParsedData["IsEOF"] = bytesInChunk < 2048;
+
+                    // Extract log chunk data (skip first 4 bytes which contain size)
+                    byte[] logChunk = new byte[Math.Min(bytesInChunk, payload.Length - 4)];
+                    Array.Copy(payload, 4, logChunk, 0, logChunk.Length);
+
+                    Console.WriteLine($"[Telemetry] LOG_FILE_RESPONSE: {bytesInChunk} bytes{(bytesInChunk < 2048 ? " (EOF)" : "")}");
+
+                    // Notify listeners with chunk data
+                    LogChunkReceived?.Invoke(this, (logChunk, bytesInChunk, transactionId));
                 }
                 break;
 

@@ -4,7 +4,9 @@
       "Bash(dotnet build)",
       "Bash(cat:*)",
       "Read(//c/source/itamar/javasrc/**)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(taskkill:*)",
+      "Bash(dotnet build:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -102,8 +102,8 @@ class Program
         Console.WriteLine($"║  Connected to: {_device.SerialNumber,-42} ║");
         Console.WriteLine("╚════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
-        Console.WriteLine("  1. Start Sleep Study");
-        Console.WriteLine("  2. Receive Study Data (Live)");
+        Console.WriteLine("  1. Configure Sleep Study (START_SESSION)");
+        Console.WriteLine("  2. Start Data Acquisition (START_ACQUISITION + Receive)");
         Console.WriteLine("  3. Stop Session");
         Console.WriteLine("  4. Request Device Status");
         Console.WriteLine("  5. Test Finger Probe Detection");
@@ -112,6 +112,7 @@ class Program
         Console.WriteLine("  8. Test LEDs (Turn Off)");
         Console.WriteLine("  9. Test LEDs (Blink Pattern)");
         Console.WriteLine("  r. Request Stored Data (After Study)");
+        Console.WriteLine("  l. Download Device Log (Diagnostics)");
         Console.WriteLine("  d. Disconnect");
         Console.WriteLine("  x. Exit");
         Console.WriteLine();
@@ -153,6 +154,10 @@ class Program
             case 'r':
             case 'R':
                 await RequestStoredDataAsync();
+                break;
+            case 'l':
+            case 'L':
+                await DownloadDeviceLogAsync();
                 break;
             case 'd':
             case 'D':
@@ -259,7 +264,10 @@ class Program
 
     static async Task StartSleepStudyAsync()
     {
-        Console.WriteLine("🌙 Starting sleep study session...");
+        Console.WriteLine("🌙 Configuring sleep study session...");
+        Console.WriteLine();
+        Console.WriteLine("This sends START_SESSION (0x0100) to configure the session.");
+        Console.WriteLine("After configuration, use option 2 to start data acquisition.");
         Console.WriteLine();
 
         bool success = await _device.StartSleepStudyAsync();
@@ -267,18 +275,17 @@ class Program
         if (success)
         {
             Console.WriteLine();
-            Console.WriteLine("✓ Sleep study started successfully!");
-            Console.WriteLine("  The device is now recording.");
+            Console.WriteLine("✓ Session configured successfully!");
+            Console.WriteLine("  Device is ready for data acquisition.");
             Console.WriteLine();
-            Console.WriteLine("  Patient should:");
-            Console.WriteLine("  - Wear the device on their wrist");
-            Console.WriteLine("  - Place the finger probe on their finger");
-            Console.WriteLine("  - Go to sleep");
+            Console.WriteLine("  Next steps:");
+            Console.WriteLine("  1. Use option 2 to start data acquisition (live data)");
+            Console.WriteLine("  2. OR device can record autonomously and download later");
         }
         else
         {
             Console.WriteLine();
-            Console.WriteLine("❌ Failed to start sleep study.");
+            Console.WriteLine("❌ Failed to configure session.");
         }
 
         Console.WriteLine();
@@ -288,9 +295,12 @@ class Program
 
     static async Task ReceiveStudyDataAsync()
     {
-        Console.WriteLine("📥 Receive Live Study Data");
+        Console.WriteLine("📥 Start Data Acquisition and Receive Live Data");
         Console.WriteLine();
-        Console.WriteLine("This will save DATA packets (0x0800) from an active recording session.");
+        Console.WriteLine("This sends START_ACQUISITION (0x0600) to begin data collection,");
+        Console.WriteLine("then saves incoming DATA packets (0x0800) to a file.");
+        Console.WriteLine();
+        Console.WriteLine("⚠️  Note: Session must be configured first (option 1)!");
         Console.WriteLine();
         Console.Write("Enter duration in seconds (or 0 for continuous): ");
 
@@ -302,10 +312,7 @@ class Program
         }
 
         Console.WriteLine();
-        Console.WriteLine("⚠️  Note: Device must have an ACTIVE sleep study session running!");
-        Console.WriteLine("   If no session is active, no data will be received.");
-        Console.WriteLine();
-        Console.Write("Press any key to start receiving data...");
+        Console.Write("Press any key to start acquisition and receive data...");
         Console.ReadKey();
         Console.WriteLine();
         Console.WriteLine();
@@ -322,7 +329,8 @@ class Program
         else
         {
             Console.WriteLine("⚠️  No data packets received.");
-            Console.WriteLine("   Make sure a sleep study session is active on the device.");
+            Console.WriteLine("   Make sure the session was configured (option 1).");
+            Console.WriteLine("   Device may have disconnected or not started acquisition.");
         }
 
         Console.WriteLine();
@@ -363,6 +371,49 @@ class Program
             Console.WriteLine("⚠️  No data packets received.");
             Console.WriteLine("   Make sure the device has a completed study stored.");
             Console.WriteLine("   Or the device memory may be empty.");
+        }
+
+        Console.WriteLine();
+        Console.Write("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    static async Task DownloadDeviceLogAsync()
+    {
+        Console.WriteLine("📋 Download Device Log");
+        Console.WriteLine();
+        Console.WriteLine("This will download the device's diagnostic log file.");
+        Console.WriteLine("The log contains device events, errors, and operational history.");
+        Console.WriteLine();
+        Console.WriteLine("⚠️  Note: This is for technician/debugging use.");
+        Console.WriteLine("   Log file will be saved in binary format (.bin)");
+        Console.WriteLine();
+        Console.Write("Press any key to start download...");
+        Console.ReadKey();
+        Console.WriteLine();
+        Console.WriteLine();
+
+        Console.WriteLine("📥 Downloading device log...");
+        Console.WriteLine("⏳ This may take several seconds depending on log size.");
+        Console.WriteLine();
+
+        var (success, totalBytes) = await _device.DownloadDeviceLogAsync();
+
+        Console.WriteLine();
+        if (success && totalBytes > 0)
+        {
+            Console.WriteLine($"✓ Successfully downloaded device log!");
+            Console.WriteLine($"  Total: {totalBytes:N0} bytes");
+            Console.WriteLine($"  File saved to My Documents folder");
+        }
+        else if (totalBytes == 0)
+        {
+            Console.WriteLine("⚠️  No log data received.");
+            Console.WriteLine("   The device log may be empty.");
+        }
+        else
+        {
+            Console.WriteLine("❌ Failed to download device log.");
         }
 
         Console.WriteLine();
