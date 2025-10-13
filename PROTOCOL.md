@@ -821,7 +821,7 @@ flowchart TD
     ProcessData --> SendAck[Send ACK to device<br/>CommandTasker.d]
     LogRetrans --> SendAck
 
-    SendAck --> UpdateState[Update data transfer state<br/>setDataTransferState(1)]
+    SendAck --> UpdateState[Update data transfer state<br/>setDataTransferState 1 ]
 
     UpdateState --> End([Continue receiving])
     Skip --> End
@@ -865,7 +865,7 @@ stateDiagram-v2
     Idle --> AddCommand: e() - Add command
     AddCommand --> QueueCommand: Create CommandTaskerItem
 
-    QueueCommand --> CheckThread{CmdSendThread<br/>running?}
+    QueueCommand --> CheckThread CmdSendThread<br/>running?
     CheckThread -->|No| StartThread: Start thread
     CheckThread -->|Yes| Queued: Already running
 
