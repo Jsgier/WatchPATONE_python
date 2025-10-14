@@ -345,15 +345,61 @@ public class WatchPatDevice : IDisposable
         {
             Console.WriteLine($"[Device] Stopping session...");
 
-            var packet = WatchPatProtocol.CreateStopSessionCommand();
-            bool success = await WriteCommandAsync(packet, "STOP_SESSION");
+            // Create a TaskCompletionSource to wait for the ACK
+            var ackCompletionSource = new TaskCompletionSource<bool>();
 
-            if (success)
+            // Subscribe to the ACK event
+            EventHandler<(ushort ackedCommand, byte status)> ackHandler = null;
+            ackHandler = (sender, args) =>
             {
-                Console.WriteLine($"[Device] ✓ Session stopped");
+                // Check if this is an ACK for STOP_SESSION (0x0700)
+                if (args.ackedCommand == 0x0700)
+                {
+                    // Unsubscribe immediately
+                    Telemetry.AckReceived -= ackHandler;
+                    // Signal result based on status (status 0 = success, anything else is an error)
+                    ackCompletionSource.TrySetResult(args.status == 0);
+                }
+            };
+
+            Telemetry.AckReceived += ackHandler;
+
+            // Send the command
+            var packet = WatchPatProtocol.CreateStopSessionCommand();
+            bool commandSent = await WriteCommandAsync(packet, "STOP_SESSION");
+
+            if (!commandSent)
+            {
+                Telemetry.AckReceived -= ackHandler;
+                return false;
             }
 
-            return success;
+            // Wait for ACK with 15 second timeout (device might take longer to stop)
+            var ackTask = ackCompletionSource.Task;
+            var timeoutTask = Task.Delay(15000);
+            var completedTask = await Task.WhenAny(ackTask, timeoutTask);
+
+            // Unsubscribe if timeout occurred
+            Telemetry.AckReceived -= ackHandler;
+
+            if (completedTask == ackTask)
+            {
+                bool ackSuccess = ackTask.Result;
+                if (ackSuccess)
+                {
+                    Console.WriteLine($"[Device] ✓ Session stopped");
+                }
+                else
+                {
+                    Console.WriteLine($"[Device] ⚠ Stop session acknowledged with error");
+                }
+                return ackSuccess;
+            }
+            else
+            {
+                Console.WriteLine($"[Device] ⚠ Stop session ACK timeout");
+                return false;
+            }
         }
         catch (Exception ex)
         {

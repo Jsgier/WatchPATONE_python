@@ -6,7 +6,8 @@
       "Read(//c/source/itamar/javasrc/**)",
       "Bash(find:*)",
       "Bash(taskkill:*)",
-      "Bash(dotnet build:*)"
+      "Bash(dotnet build:*)",
+      "mcp__serena__search_for_pattern"
     ]
   },
   "enableAllProjectMcpServers": true,
