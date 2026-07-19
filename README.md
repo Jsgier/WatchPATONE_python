@@ -1,6 +1,13 @@
 # WatchPATONERE
 WatchPAT ONE Reverse Engineering
 
+## Update
+
+1. This repo builds upon the incredible work done by Chri at MRIIOT (https://github.com/MRIIOT).  Thanks Chris!
+2. The point of this repo is to provide a cross platform python interface to use the WatchPat ONE device, for heartrate and blood oxygen monitoring.  The vendor of this device sells it as dispoable, and it seems like an incredible waste of engineering and hardware to just get rid of it.  Why not use it to get a live monitor of this health telemetry, and get some use out of the device?
+
+# 
+
 ## Setup
 
 1. Clone this repository to `C:\source\itamar\WatchPATONERE`.
